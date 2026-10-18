@@ -3,6 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#081912">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Planize">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<script id="sw-kayit">
+/* Servis çalışanı (Adım 8): uygulamanın internetsiz açılması için. Yalnızca https ve localhost'ta; file:// ve mantık testi sayfasında kayıt yapılmaz.
+   Kayıt başarısız olursa uygulama yine normal çalışır. */
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') && location.hash !== '#vizyon-test') {
+  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () { /* kayıt olmadı: servis çalışanı olmadan devam */ }); });
+}
+</script>
 <title>Planize</title>
 <script id="depo-katman">
 /* DEPO KATMANI (eşitleme hazırlığı, Adım 2): uygulamanın yerel depoya (localStorage) yazdığı/okuduğu HER yer buradan geçer.
@@ -10,7 +24,7 @@
    yerelMi(): buluta gitmeyecek anahtarlar (iç yedekler, kurtarma kopyaları, pencere varlığı, arayüz durumu). */
 (function (kok) {
   'use strict';
-  const YEREL = { 'planim.yedekler.v1': 1, 'planim.kurtarma.v1': 1, 'planim.pencereler.v1': 1, 'planim.ui.v2': 1, 'planize.oturum.v1': 1, 'planize.cihaz.v1': 1, 'planize.esitleme.taban.v1': 1 };
+  const YEREL = { 'planim.yedekler.v1': 1, 'planim.kurtarma.v1': 1, 'planim.pencereler.v1': 1, 'planim.ui.v2': 1, 'planize.oturum.v1': 1, 'planize.cihaz.v1': 1, 'planize.esitleme.taban.v1': 1, 'planize.esitleme.resim.v1': 1 };
   const yazinca = [];          // başarılı her yazmadan sonra çağrılır: ({ anahtar, yerel })
   const disaridan = [];        // başka pencere/sekme değiştirince çağrılır (storage olayı)
   let disDinleniyor = false;
@@ -119,7 +133,7 @@
   function bildir() { dinleyiciler.slice().forEach((f) => { try { f(durum); } catch (e) { /* dinleyici girişi bozmasın */ } }); }
   function ayarla(yeni, k, n) {
     durum = yeni; kullanici = k || null; neden = n || '';
-    html.classList.toggle('giris-bekle', !test && yeni !== 'acik' && yeni !== 'cevrimdisi-acik');
+    html.classList.toggle('giris-bekle', !test && yeni !== 'acik' && yeni !== 'cevrimdisi-acik' && yeni !== 'yerel');
     ekranGuncelle();
     bildir();
   }
@@ -191,7 +205,7 @@
   const zamanAsimi = (p, ms) => new Promise((coz, red) => { const z = setTimeout(() => red(new Error('zaman-asimi')), ms); p.then((v) => { clearTimeout(z); coz(v); }, (er) => { clearTimeout(z); red(er); }); });
   async function baslat() {
     if (test) return;
-    if (location.protocol === 'file:') { ayarla('hata', null, 'file'); return; }
+    if (location.protocol === 'file:') { ayarla('yerel'); return; }   // doğrudan dosya olarak açıldı: giriş/bulut yok, veri yalnızca bu bilgisayarda (yedek almak için kullanılabilir)
     try {
       const m = await zamanAsimi(Promise.all([import(ADRES + 'firebase-app.js'), import(ADRES + 'firebase-auth.js')]), 12000);
       sdk = m[1];
@@ -244,12 +258,15 @@
   const K = { gorevler: 'planim.tasks.v1', arsiv: 'planim.arsiv.v1', listeler: 'planim.lists.v1', notlar: 'planim.notes.v1', gecmis: 'planim.log.v1',
     ayarlar: 'planim.ayarlar.v1', renk: 'planim.calcolor.v1', vizyon: 'planim.vizyon.v1' };
   const SENKRON_ANAHTAR = Object.keys(K).map((a) => K[a]);
-  const KEY_TABAN = 'planize.esitleme.taban.v1', KEY_CIHAZ = 'planize.cihaz.v1';
+  const KEY_TABAN = 'planize.esitleme.taban.v1', KEY_CIHAZ = 'planize.cihaz.v1', KEY_RESIM = 'planize.esitleme.resim.v1';
   const CIHAZ = (() => { try { let c = PlanizeDepo.al(KEY_CIHAZ); if (!c) { c = 'c_' + Math.random().toString(36).slice(2, 8); PlanizeDepo.koy(KEY_CIHAZ, c); } return c; } catch (e) { return 'c_?'; } })();
   const dinleyiciler = [];
   let sdk = null, db = null, uid = null, nesil = 0, abonelikler = [], taban = {};
   let hata = null, yazimda = false, bekleyen = 0, sonEsit = 0, cakismaListe = [], fren = null, frenIzin = false, baslangic = 0;
   let sunucuda = {}, ilkGeldi = {};
+  let uzakVeri = {};   // koleksiyon -> Map(kimlik -> { h: özet, g: sunucu zamanı, veri }): bulutta şu an olan kayıtlar (taşıma özeti ve bulut yedeği için)
+  let resimVar = new Set(), resimBekle = new Set();   // buluta yüklenmiş / yüklenecek resim kimlikleri
+  const resimYok = new Map();                         // bulutta bulunamayan resim -> son deneme zamanı (gereksiz okuma olmasın)
   let planTimer = null, tabanTimer = null, yenidenTimer = null, sonMesaj = '', sonMesajZamani = 0;
 
   // ---- Yardımcılar ----
@@ -358,7 +375,7 @@
     if (kok.navigator && kok.navigator.onLine === false) return 'cevrimdisi';
     if (!hepsi(ilkGeldi)) return 'esitleniyor';
     if (!hepsi(sunucuda)) return (Date.now() - baslangic > 8000) ? 'cevrimdisi' : 'esitleniyor';
-    if (yazimda || bekleyen > 0) return 'esitleniyor';
+    if (yazimda || bekleyen > 0 || resimBekle.size > 0) return 'esitleniyor';
     return 'esit';
   }
   const yazi = (d) => ETIKET[d] + (d === 'cevrimdisi' && bekleyen ? ' · ' + bekleyen + ' bekliyor' : '');
@@ -423,10 +440,16 @@
       const ls = ym.has(d.id) ? ym.get(d.id) : null;
       const uh = uz === null ? '' : ozet(uz), lh = ls === null ? '' : ozet(ls);
       if (uh === lh) { taban[key] = [uh, gMs]; return; }
-      if ((tb ? tb[0] : '') === lh) { if (!degisim.has(kay)) degisim.set(kay, new Map()); degisim.get(kay).set(d.id, uz); }   // yerel değişmemiş: uzaktakini al
+      if ((tb ? tb[0] : '') === lh) {   // yerel değişmemiş: uzaktakini al
+        if (tb && tb[1] === 0 && ls !== null && uz !== null) cakismaKaydet(kay, d.id, ls);   // ilk açılıştan kalan yerel kayıt buluttakiyle ezilirken yerel sürüm yedeklenir (Geri getir ile dönülebilir)
+        if (!degisim.has(kay)) degisim.set(kay, new Map()); degisim.get(kay).set(d.id, uz);
+      }
       else { if (uz !== null) cakismaKaydet(kay, d.id, uz); cakisma = true; }                                                  // ikisi de değişmiş: yerel kazanır, uzaktaki yedeklenir
       taban[key] = [uh, gMs];
     });
+    const uzak = new Map();
+    snap.docs.forEach((d) => { const v = d.data(); if (!v || v.s || typeof v.veri !== 'string') return; uzak.set(d.id, { h: ozet(v.veri), g: v.g && v.g.toMillis ? v.g.toMillis() : 0, veri: v.veri }); });
+    uzakVeri[kol] = uzak;
     if (degisim.size) { uygulaYerele(degisim); sonEsit = Date.now(); }
     tabanSoon(); durumDegisti();
     if (cakisma || sunucuda[kol]) planla(200);
@@ -459,9 +482,10 @@
       const toplam = Object.keys(taban).filter((k) => k.indexOf(silmeler[0].kay.kol + '/') === 0).length || 1;
       if (silmeler.length > toplam / 2) { fren = silmeler.length; liste = liste.filter((o) => o.str !== null); }
     } else { fren = null; }
-    if (!liste.length) { durumDegisti(); return; }
+    if (!liste.length && !resimBekle.size) { durumDegisti(); return; }
     if (!hepsi(sunucuda) || (kok.navigator && kok.navigator.onLine === false)) { durumDegisti(); return; }
     yazimda = true; durumDegisti();
+    resimIsaretle(liste);
     try {
       for (let i = 0; i < liste.length; i += 400) {
         const dilim = liste.slice(i, i + 400), b = sdk.writeBatch(db);
@@ -473,6 +497,7 @@
         dilim.forEach((o) => { taban[o.key] = [o.h, -1]; });
         tabanSoon();
       }
+      await resimleriGonder();
       hata = null; sonEsit = Date.now();
     } catch (e) { hataIsle(e); }
     finally { yazimda = false; }
@@ -481,19 +506,73 @@
     if (bekleyen && !hata) planla(300);
   }
 
+  // ---- Resimler: her resim ayrı belge users/{uid}/resimler/{id} = { veri: base64, tur, w, h, boyut, s, g, c } ----
+  // Resim, onu kullanan kutucuk buluta gönderilirken yüklenir; başka cihazda yerelde yoksa ihtiyaç anında indirilir (VizyonResim.url).
+  const resimKutuIdleri = (str) => { try { const k = JSON.parse(str), o = []; (k.blocks || []).forEach((b) => { if (b && b.type === 'image' && b.src != null) o.push(String(b.src)); }); return o; } catch (e) { return []; } };
+  function resimYukle() {
+    resimVar = new Set(); resimBekle = new Set();
+    try { const o = JSON.parse(PlanizeDepo.al(KEY_RESIM) || 'null'); if (o && o.uid === uid) { resimVar = new Set(o.var || []); resimBekle = new Set(o.bekle || []); } } catch (e) { /* boş başla */ }
+  }
+  function resimKaydet() { try { PlanizeDepo.koy(KEY_RESIM, JSON.stringify({ uid, var: Array.from(resimVar), bekle: Array.from(resimBekle) })); } catch (e) { /* yer yoksa bir sonraki sefer */ } }
+  function resimIsaretle(liste) {
+    let d = false;
+    liste.forEach((o) => { if (o.kay.kol === 'vizyon_kutucuklar' && o.str !== null) resimKutuIdleri(o.str).forEach((id) => { if (!resimVar.has(id) && !resimBekle.has(id)) { resimBekle.add(id); d = true; } }); });
+    if (d) resimKaydet();
+  }
+  function resimleriHepsi() {   // taşıma (Adım 6): yerel Vizyon'daki tüm resimler yüklenecek diye işaretlenir
+    const o = oku(K.vizyon); resimVar = new Set();
+    if (o && Array.isArray(o.tiles)) o.tiles.forEach((k) => resimKutuIdleri(JSON.stringify(k)).forEach((id) => resimBekle.add(id)));
+    resimKaydet();
+  }
+  const blobBase64 = (blob) => new Promise((coz, red) => { const r = new FileReader(); r.onload = () => coz(String(r.result).split(',')[1] || ''); r.onerror = () => red(r.error); r.readAsDataURL(blob); });
+  function base64Blob(b64, tur) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: tur || 'image/jpeg' }); }
+  async function resimleriGonder() {
+    if (!resimBekle.size || !kok.VizyonResim) return;
+    for (const id of Array.from(resimBekle)) {
+      if (resimVar.has(id)) { resimBekle.delete(id); continue; }
+      const kayit = await kok.VizyonResim.al(id);
+      if (!kayit || !kayit.blob) { resimBekle.delete(id); continue; }      // bu cihazda yok (başka cihazdan gelmiştir)
+      let blob = kayit.blob, w = kayit.w, h = kayit.h;
+      if (blob.size > kok.VizyonResim.AYAR.enBuyukBlob) {
+        try { const k = await kok.VizyonResim.bulutIcin(blob); blob = k.blob; w = k.w || w; h = k.h || h; }
+        catch (e) { resimBekle.delete(id); bildir({ tur: 'hata', mesaj: 'Bir resim bulut için fazla büyük olduğundan eşitlenemedi. Resmi daha küçük bir dosyayla değiştirin.' }); continue; }
+      }
+      await sdk.setDoc(sdk.doc(db, 'users', uid, 'resimler', id), { veri: await blobBase64(blob), tur: 'image/jpeg', w: w || 0, h: h || 0, boyut: blob.size, s: false, g: sdk.serverTimestamp(), c: CIHAZ });
+      resimVar.add(id); resimBekle.delete(id); resimKaydet();
+    }
+    resimKaydet();
+  }
+  async function resimGetir(id) {   // Promise<{id, blob, w, h, boyut, createdAt} | null>
+    if (!db || !uid || !sdk || !sdk.getDoc) return null;
+    const son = resimYok.get(id); if (son && Date.now() - son < 15000) return null;
+    try {
+      const s = await sdk.getDoc(sdk.doc(db, 'users', uid, 'resimler', id));
+      if (!s.exists()) { resimYok.set(id, Date.now()); return null; }
+      const v = s.data(); if (v.s || typeof v.veri !== 'string') { resimYok.set(id, Date.now()); return null; }
+      const blob = base64Blob(v.veri, v.tur); resimVar.add(id); resimKaydet();
+      return { id, blob, w: v.w, h: v.h, boyut: blob.size, createdAt: Date.now() };
+    } catch (e) { resimYok.set(id, Date.now() - 10000); return null; }       // bağlantı yok: kısa süre sonra yeniden denenir
+  }
+  function resimSil(id) {
+    resimBekle.delete(id);
+    if (!db || !uid || !resimVar.has(id)) return;
+    resimVar.delete(id); resimKaydet();
+    try { sdk.deleteDoc(sdk.doc(db, 'users', uid, 'resimler', id)).catch(() => {}); } catch (e) { /* yoksay */ }
+  }
+
   // ---- Başlat / durdur ----
   function durdur() {
     nesil++; abonelikler.forEach((u) => { try { u(); } catch (e) { /* yoksay */ } }); abonelikler = [];
     clearTimeout(planTimer); clearTimeout(yenidenTimer);
     if (uid) tabanKaydet();
-    uid = null; db = null; sunucuda = {}; ilkGeldi = {}; cakismaListe = []; hata = null; bekleyen = 0; yazimda = false; fren = null;
+    uid = null; db = null; sunucuda = {}; ilkGeldi = {}; uzakVeri = {}; cakismaListe = []; hata = null; bekleyen = 0; yazimda = false; fren = null;
     durumDegisti();
   }
   async function baslat(yeniUid) {
     if (uid === yeniUid) return;
     durdur();
     uid = yeniUid; const benimNesil = nesil; baslangic = Date.now();
-    taban = tabanYukle() || tabanTohumla(); tabanKaydet();
+    taban = tabanYukle() || tabanTohumla(); tabanKaydet(); resimYukle();
     try {
       const app = kok.PlanizeGiris.uygulama(); if (!app) throw new Error('uygulama-yok');
       sdk = sdk || await zamanAsimi(import(kok.PlanizeGiris.adres + 'firebase-firestore.js'), 12000);
@@ -524,6 +603,59 @@
     if (g && g.acikMi() && g.uid()) baslat(g.uid()); else if (uid) durdur(); else durumDegisti();
   }
 
+  // ---- Taşıma (Adım 6): bu cihazdaki verileri buluta gönder ----
+  // Bulutta olup bu cihazda olmayan kayıtlar silinmez (bu cihaza da gelir); aynı kimlikli farklı kayıtlar bu cihazdaki sürümle değiştirilir. Yerel veri silinmez.
+  const aktifMi = () => !!(uid && db);
+  async function tasimaOzeti() {
+    if (!aktifMi()) return { hazir: false, neden: 'Bulutla bağlantı kurulamadı. İnternet ve giriş durumunu kontrol edip tekrar deneyin.' };
+    if (!hepsi(sunucuda)) return { hazir: false, neden: 'Bulutla bağlantı henüz kurulmadı. Birkaç saniye bekleyip tekrar deneyin.' };
+    PlanizeDepo.kaydetIste();
+    const say = {}; let degisecek = 0, uzakToplam = 0;
+    KAYNAKLAR.forEach((kay) => {
+      if (kay.tek) return;
+      const m = kay.yerel() || new Map(), um = uzakVeri[kay.kol] || new Map();
+      let yeni = 0, deg = 0, ayni = 0;
+      m.forEach((str, id) => { const u = um.get(id); if (!u) yeni++; else if (u.h === ozet(str)) ayni++; else deg++; });
+      say[kay.kol] = { yerel: m.size, yeni, degisecek: deg, ayni, bulutta: um.size };
+      degisecek += deg; uzakToplam += um.size;
+    });
+    let resim = 0, resimBayt = 0; const idler = new Set(), vz = oku(K.vizyon);
+    if (vz && Array.isArray(vz.tiles)) vz.tiles.forEach((k) => resimKutuIdleri(JSON.stringify(k)).forEach((id) => idler.add(id)));
+    for (const id of idler) { const k = kok.VizyonResim && await kok.VizyonResim.al(id); if (k && k.blob) { resim++; resimBayt += k.blob.size; } }
+    return { hazir: true, say, degisecek, uzakVar: uzakToplam > 0, uzakToplam, resim, resimBayt };
+  }
+  function bulutYedegi() {   // buluttaki mevcut verinin, uygulamanın yedek biçiminde dosyası (resimsiz)
+    const liste = (kol) => Array.from((uzakVeri[kol] || new Map()).values()).map((u) => { try { return JSON.parse(u.veri); } catch (e) { return null; } }).filter(Boolean);
+    const tekli = (kol, id) => { const u = (uzakVeri[kol] || new Map()).get(id); try { return u ? JSON.parse(u.veri) : null; } catch (e) { return null; } };
+    const genel = tekli('ayarlar', 'genel') || {}, sira = tekli('ayarlar', 'vizyon') || {}, gecmis = tekli('gecmis', 'ana');
+    const data = { tasks: liste('gorevler'), lists: liste('listeler'), notes: liste('notlar'), log: Array.isArray(gecmis) ? gecmis : [], archive: liste('arsiv'),
+      vizyon: { surum: 1, boardOrder: Array.isArray(sira.boardOrder) ? sira.boardOrder : [], boards: liste('vizyon_panolar'), tiles: liste('vizyon_kutucuklar') } };
+    if (typeof genel.calColor === 'number') data.calColor = genel.calColor;
+    if (genel.theme) data.theme = genel.theme;
+    if (genel.homeTheme) data.homeTheme = genel.homeTheme;
+    const simdi = new Date();
+    return { ad: 'planize-bulut-yedek-' + simdi.toISOString().slice(0, 10) + '.json', metin: JSON.stringify({ app: 'planim', version: 1, exportedAt: simdi.toISOString(), data }, null, 2) };
+  }
+  function tasimayaBasla() {   // Promise<{ ok, mesaj }>: gönderme bitince (ya da hata/zaman aşımında) çözülür
+    PlanizeDepo.kaydetIste();
+    KAYNAKLAR.forEach((kay) => {
+      const m = kay.yerel(); if (!m) return;
+      const um = uzakVeri[kay.kol] || new Map();
+      m.forEach((str, id) => { const key = kay.kol + '/' + id, u = um.get(id); if (u && u.h === ozet(str)) taban[key] = [u.h, u.g]; else delete taban[key]; });   // buluttakiyle aynı olanlar yeniden yazılmaz
+    });
+    tabanKaydet(); resimleriHepsi(); hata = null; planla(0); durumDegisti();
+    return new Promise((coz) => {
+      const t0 = Date.now();
+      const bak = () => {
+        if (hata) { coz({ ok: false, mesaj: hata.mesaj }); return; }
+        if (!planTimer && !yazimda && !resimBekle.size && kirli().length === 0) { coz({ ok: true }); return; }
+        if (Date.now() - t0 > 600000) { coz({ ok: false, mesaj: 'Zaman aşımı; bağlantı gelince devam eder.' }); return; }
+        setTimeout(bak, 500);
+      };
+      setTimeout(bak, 1000);
+    });
+  }
+
   // ---- Ayarlar bölümü ve dış işlevler ----
   function bolumHTML() {
     const d = durum(); if (d === 'kapali' || !uid) return '';
@@ -535,6 +667,9 @@
         <h3>Eşitleme</h3>
         <p class="set-p">${esc(aciklama(d))}</p>
         <div class="row-a"><button class="btn-s" data-act="esitleSimdi">Şimdi eşitle</button></div>
+        <div class="set-sub">Verilerimi buluta taşı</div>
+        <p class="set-p">Bu cihazdaki görev, not, liste, Vizyon panoları ve resimleri buluta gönderir. Önce bir özet gösterilir ve onayınız istenir. Bu cihazdaki veriler silinmez.</p>
+        <div class="row-a"><button class="btn-s" data-act="tasimaOzeti">Verilerimi buluta gönder</button></div>
         ${hata ? `<div class="warn">${esc(hata.mesaj)}</div>` : ''}
         ${fren ? `<div class="warn">Bu cihazda ${fren} kayıt silinmiş görünüyor. Güvenlik için bu silmeler buluta gönderilmedi.</div><div class="row-a"><button class="btn-s" data-act="silmeOnayla">Bu silmeleri buluta da uygula</button></div>` : ''}
         <div class="set-sub">Ezilen değişiklikler <span>(son 50; başka cihazın değişikliği ezildiğinde burada saklanır)</span></div>
@@ -558,8 +693,9 @@
   kok.PlanizeEsitleme = {
     durum, etiketHTML, bolumHTML, cakismalar: () => cakismaListe.slice(), geriGetir, bekleyen: () => bekleyen,
     simdi() { hata = null; planla(0); durumDegisti(); },
-    hepsiniGonder() { taban = {}; tabanKaydet(); planla(0); },   // Adım 6 (taşıma) için: tüm yerel kayıtlar gönderilecek diye işaretlenir
+    hepsiniGonder() { taban = {}; tabanKaydet(); resimleriHepsi(); planla(0); },   // Adım 6 (taşıma) için: tüm yerel kayıtlar gönderilecek diye işaretlenir
     frenOnayla() { frenIzin = true; planla(0); },
+    resimGetir, resimSil, tasimaOzeti, bulutYedegi, tasimayaBasla, aktifMi,
     dinle: (f) => { dinleyiciler.push(f); }
   };
   if (kok.PlanizeGiris) { kok.PlanizeGiris.dinle(girisKontrol); girisKontrol(); }
@@ -3667,12 +3803,13 @@
 /* =====================================================================
    VİZYON PANOSU - RESİM DEPOSU (IndexedDB)
    Resimler localStorage'a değil buraya yazılır; bloklarda yalnızca resim kimliği tutulur.
-   Eklenirken en uzun kenarı ~1600px'e küçültülür (JPEG). Görsel kod yok.
+   Eklenirken en uzun kenarı 1280px'e ve en çok 640 KB'a küçültülür (JPEG, kalite 0,72; sığmazsa kalite/boyut kademeli düşer). Bulut belgesi 1 MiB sınırı için.
+   Yerelde olmayan resim, ihtiyaç anında bulutan indirilir (PlanizeEsitleme.resimGetir). Görsel kod yok.
    ===================================================================== */
 (function (kok) {
   'use strict';
   const DB_AD = 'planim-vizyon'; const DEPO = 'resimler';
-  const AYAR = { enUzunKenar: 1600, kalite: 0.85, enBuyukDosya: 30 * 1024 * 1024, yetimEnAzYasMs: 60000 };
+  const AYAR = { enUzunKenar: 1280, kalite: 0.72, enBuyukBlob: 640 * 1024, enBuyukDosya: 30 * 1024 * 1024, yetimEnAzYasMs: 60000 };
 
   let dbSoz = null;
   function ac() {
@@ -3698,22 +3835,39 @@
     tx.onabort = () => red(tx.error || new Error('Resim deposu işlemi iptal edildi.'));
   }));
 
+  // Bitmap'i en uzun kenar ve bayt sınırına (bulut belgesi 1 MiB; base64 şişmesi payıyla 640 KB) sığdırır: önce kalite, sonra boyut kademeli düşer
+  const OLCEKLER = [1, 0.85, 0.7, 0.55];
+  const KALITELER = [null, 0.62, 0.52, 0.42];   // null: AYAR.kalite
+  async function sigdir(bmp, enUzun) {
+    const oran0 = Math.min(1, enUzun / Math.max(bmp.width, bmp.height));
+    for (const o of OLCEKLER) {
+      for (const q of KALITELER) {
+        const w = Math.max(1, Math.round(bmp.width * oran0 * o)); const h = Math.max(1, Math.round(bmp.height * oran0 * o));
+        const tuval = document.createElement('canvas');
+        tuval.width = w; tuval.height = h;
+        const g = tuval.getContext('2d');
+        g.fillStyle = 'white'; g.fillRect(0, 0, w, h);   // saydam alan JPEG'de siyah kalmasın
+        g.drawImage(bmp, 0, 0, w, h);
+        const blob = await new Promise((coz) => tuval.toBlob(coz, 'image/jpeg', q == null ? AYAR.kalite : q));
+        if (!blob) throw new Error('Resim işlenemedi.');
+        if (blob.size <= AYAR.enBuyukBlob) return { blob, w, h };
+      }
+    }
+    throw new Error('Bu resim çok büyük. Daha küçük bir resim seçin.');
+  }
   async function kucult(dosya) {
     if (!dosya || !/^image\//.test(dosya.type)) throw new Error('Yalnızca resim dosyaları eklenebilir.');
     if (dosya.size > AYAR.enBuyukDosya) throw new Error('Dosya çok büyük (en fazla 30 MB).');
     let bmp;
     try { bmp = await createImageBitmap(dosya, { imageOrientation: 'from-image' }); } catch (e) { throw new Error('Resim okunamadı.'); }
-    const oran = Math.min(1, AYAR.enUzunKenar / Math.max(bmp.width, bmp.height));
-    const w = Math.max(1, Math.round(bmp.width * oran)); const h = Math.max(1, Math.round(bmp.height * oran));
-    const tuval = document.createElement('canvas');
-    tuval.width = w; tuval.height = h;
-    const g = tuval.getContext('2d');
-    g.fillStyle = 'white'; g.fillRect(0, 0, w, h);   // saydam alan JPEG'de siyah kalmasın
-    g.drawImage(bmp, 0, 0, w, h);
-    if (bmp.close) bmp.close();
-    const blob = await new Promise((coz) => tuval.toBlob(coz, 'image/jpeg', AYAR.kalite));
-    if (!blob) throw new Error('Resim işlenemedi.');
-    return { blob, w, h };
+    try { return await sigdir(bmp, AYAR.enUzunKenar); } finally { if (bmp.close) bmp.close(); }
+  }
+  // Eski (daha büyük) yerel resimler buluta giderken sığdırılır; zaten sığıyorsa aynen döner. Yerel kopya değişmez.
+  async function bulutIcin(blob) {
+    if (blob.size <= AYAR.enBuyukBlob) return { blob, w: null, h: null };
+    let bmp;
+    try { bmp = await createImageBitmap(blob); } catch (e) { throw new Error('Resim okunamadı.'); }
+    try { return await sigdir(bmp, Math.max(bmp.width, bmp.height)); } finally { if (bmp.close) bmp.close(); }
   }
 
   const urlOnbellek = new Map();                    // id -> adres (bulunamadıysa null)
@@ -3728,9 +3882,16 @@
   function url(id) {                                // Promise<string|null>
     if (urlOnbellek.has(id)) return Promise.resolve(urlOnbellek.get(id));
     if (bekleyen.has(id)) return bekleyen.get(id);
-    const s = islem('readonly', (d) => d.get(id)).then((kayit) => {
+    const s = islem('readonly', (d) => d.get(id)).then(async (kayit) => {
+      let bulutta = false;
+      if (!(kayit && kayit.blob) && kok.PlanizeEsitleme && kok.PlanizeEsitleme.resimGetir) {   // yerelde yok: bulutta varsa ihtiyaç anında indirilir
+        bulutta = true;
+        let k = null; try { k = await kok.PlanizeEsitleme.resimGetir(id); } catch (e) { k = null; }
+        if (k && k.blob) { kayit = k; await islem('readwrite', (d) => d.put(k)).catch(() => {}); }
+      }
       const u = kayit && kayit.blob ? URL.createObjectURL(kayit.blob) : null;
-      urlOnbellek.set(id, u); bekleyen.delete(id);
+      if (u || !bulutta) urlOnbellek.set(id, u);   // bulutta aranıp bulunamayan resme "yok" yazılmaz: sonraki çizimde yeniden denenir
+      bekleyen.delete(id);
       return u;
     }, () => { bekleyen.delete(id); return null; });
     bekleyen.set(id, s);
@@ -3741,6 +3902,7 @@
     const u = urlOnbellek.get(id);
     if (u) URL.revokeObjectURL(u);
     urlOnbellek.delete(id);
+    if (kok.PlanizeEsitleme && kok.PlanizeEsitleme.resimSil) { try { kok.PlanizeEsitleme.resimSil(id); } catch (e) { /* bulut silme başarısızsa yerel silme sürsün */ } }
     return islem('readwrite', (d) => d.delete(id)).catch(() => {});
   }
   // Hiçbir blokta kullanılmayan (ve yeni eklenmemiş) resimleri siler; silinen sayısını verir
@@ -3753,8 +3915,15 @@
     return yetim.length;
   }
   const tumKayitlar = () => islem('readonly', (d) => d.getAll());
+  const al = (id) => islem('readonly', (d) => d.get(id)).catch(() => undefined);   // ham kayıt (eşitleme katmanı için)
+  // Yedekten gelen resmi depoya yazar ({ id, blob, w, h }); daha önce "yok" diye önbelleğe alınmış adres temizlenir
+  function koy(k) {
+    const u = urlOnbellek.get(k.id); if (u) URL.revokeObjectURL(u);
+    urlOnbellek.delete(k.id);
+    return islem('readwrite', (d) => d.put({ id: k.id, blob: k.blob, w: k.w, h: k.h, boyut: k.blob.size, createdAt: Date.now() }));
+  }
 
-  kok.VizyonResim = { AYAR, ekle, url, onbellekte, sil, temizle, tumKayitlar };
+  kok.VizyonResim = { AYAR, ekle, url, onbellekte, sil, temizle, tumKayitlar, al, bulutIcin, koy };
 })(window);
 </script>
 <script id="vizyon-test">
@@ -4612,7 +4781,8 @@
     vizyon: VZ.anlik()   // resim dosyaları yedeğe girmez; bloklarda yalnızca resim kimliği bulunur
   });
   const dataSummary = (d) => `${(d.tasks || []).length} görev · ${(d.lists || []).length} liste · ${(d.notes || []).length} not` +
-    (d.vizyon && Array.isArray(d.vizyon.boards) ? ` · ${d.vizyon.boards.length} vizyon panosu` : '');
+    (d.vizyon && Array.isArray(d.vizyon.boards) ? ` · ${d.vizyon.boards.length} vizyon panosu` : '') +
+    (Array.isArray(d.resimler) && d.resimler.length ? ` · ${d.resimler.length} resim` : '');
   const fmtDateTime = (d) => `${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   function fmtDayLabel(isoDay) {
     const d = parse(isoDay);
@@ -4692,14 +4862,45 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
-  function exportBackup() {
+  // Yedek dosyasına isteğe bağlı "resimler" alanı: Vizyon'da kullanılan resimler olduğu gibi (base64). Eski yedeklerde bu alan yoktur ve yine yüklenir.
+  const blobB64 = (blob) => new Promise((coz, red) => { const r = new FileReader(); r.onload = () => coz(String(r.result).split(',')[1] || ''); r.onerror = () => red(r.error); r.readAsDataURL(blob); });
+  async function resimleriYedegeAl() {
+    const out = [];
+    for (const id of Array.from(new Set(VZ.kullanilanResimIdleri()))) {
+      const k = await VizyonResim.al(id);
+      if (k && k.blob) out.push({ id, tur: k.blob.type || 'image/jpeg', w: k.w, h: k.h, boyut: k.blob.size, veri: await blobB64(k.blob) });
+    }
+    return out;
+  }
+  // Yedekten gelen resimleri depoya koyar (geçersiz/aşırı büyük kayıtlar atlanır); veri uygulanmadan önce çağrılır ki resimler hazır olsun
+  async function resimleriYedektenYukle(liste) {
+    if (!Array.isArray(liste)) return 0;
+    let n = 0;
+    for (const r of liste.slice(0, 500)) {
+      if (!r || typeof r.id !== 'string' || !/^r_[A-Za-z0-9_]+$/.test(r.id) || typeof r.veri !== 'string' || r.veri.length > 8 * 1024 * 1024) continue;
+      try {
+        const bin = atob(r.veri), u = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+        await VizyonResim.koy({ id: r.id, blob: new Blob([u], { type: typeof r.tur === 'string' && /^image\//.test(r.tur) ? r.tur : 'image/jpeg' }), w: +r.w || 0, h: +r.h || 0 });
+        n++;
+      } catch (e) { /* bozuk resim kaydı atlanır */ }
+    }
+    return n;
+  }
+  async function exportBackup() {
     const now = new Date();
-    const payload = { app: 'planim', version: 1, exportedAt: now.toISOString(), data: collectData() };
+    const data = collectData();
+    let rs = []; try { rs = await resimleriYedegeAl(); } catch (e) { rs = []; }
+    if (rs.length) data.resimler = rs;
+    const payload = { app: 'planim', version: 1, exportedAt: now.toISOString(), data };
     downloadText(`planize-yedek-${iso(now)}-${pad(now.getHours())}${pad(now.getMinutes())}.json`, JSON.stringify(payload, null, 2));
     S.settings = Object.assign({}, S.settings, { lastExport: Date.now() });
     saveSettings();
-    showToast('Yedek dosyası indirildi');
+    showToast('Yedek dosyası indirildi' + (rs.length ? ' (' + rs.length + ' resim dahil)' : ''));
   }
+  // Bu cihaz bulutla eşitleniyorsa, yedek yüklemenin sonucu buluta ve diğer cihazlara da yansır: onay penceresinde açıkça yazılır
+  const bulutNotu = () => (window.PlanizeEsitleme && window.PlanizeEsitleme.aktifMi()
+    ? '\nBu cihaz bulutla eşitleniyor: yedek yüklenince bulutta ve diğer cihazlardaki veriler de bu yedeğe göre değişir (yedekte olmayan kayıtlar her yerden silinir). "Geri al" bu cihazı eski haline döndürür ve bunu da buluta yansıtır.' : '');
   function handleImportFile(file) {
     const reader = new FileReader();
     reader.onload = () => {
@@ -4709,8 +4910,8 @@
       const when = obj.exportedAt ? new Date(obj.exportedAt) : null;
       askConfirm({
         title: 'Yedek yüklensin mi?',
-        body: `Yedek${when && !isNaN(when) ? ' (' + fmtDateTime(when) + ')' : ''}: ${dataSummary(obj.data)}\nŞu anki veriler (${dataSummary(collectData())}) bu yedekle değiştirilecek. Hemen ardından "Geri al" ile eski haline dönebilirsiniz.`,
-        ok: 'Yedeği yükle', onOk: () => restoreData(obj.data, 'Yedek yüklendi')
+        body: `Yedek${when && !isNaN(when) ? ' (' + fmtDateTime(when) + ')' : ''}: ${dataSummary(obj.data)}\nŞu anki veriler (${dataSummary(collectData())}) bu yedekle değiştirilecek. Hemen ardından "Geri al" ile eski haline dönebilirsiniz.${bulutNotu()}`,
+        ok: 'Yedeği yükle', onOk: () => { resimleriYedektenYukle(obj.data.resimler).catch(() => 0).then(() => restoreData(obj.data, 'Yedek yüklendi')); }
       });
       render();
     };
@@ -5679,7 +5880,10 @@
         <h3>Hesap</h3>
         <p class="set-p">${gr.eposta() ? 'Giriş yapılan hesap: <b>' + esc(gr.eposta()) + '</b>' : 'Çevrimdışı açıldı; hesap internet gelince doğrulanır.'}</p>
         <div class="row-a"><button class="btn-s" data-act="cikisYap">Çıkış yap</button></div>
-      </section>` : '';
+      </section>` : (gr && gr.durum() === 'yerel' ? `<section class="set-sec">
+        <h3>Hesap</h3>
+        <p class="set-p">Bu sayfa doğrudan dosya olarak açıldı: giriş ve bulut eşitlemesi kapalı, veriler yalnızca bu bilgisayarda duruyor. Eşitleme için uygulamayı yayın adresinden açın. Buradan "Yedeği indir" ile (resimler dahil) yedek alabilirsiniz.</p>
+      </section>` : '');
     const bkRows = backups.length
       ? backups.map((b, i) => `<div class="bk-row"><div class="bk-a"><div class="bk-d">${esc(fmtDayLabel(b.date))}</div><div class="bk-s">${esc(dataSummary(b.data || {}))}</div></div>
           <button class="btn-s sm" data-act="restoreAuto" data-v="${i}">Geri yükle</button></div>`).join('')
@@ -5797,7 +6001,7 @@
   function vzResimYok(img) {
     const s = document.createElement('span');
     if (img.classList.contains('vz-kucuk-resim')) { s.className = 'vz-kucuk-resim yok'; img.replaceWith(s); return; }   // menü önizlemesi: yalnızca boş kutu
-    s.textContent = '[Resim bulunamadı: yedekler resimleri içermez]';
+    s.textContent = '[Resim bulunamadı: başka cihazdan henüz gelmemiş olabilir. Yedekler resimleri içermez]';
     img.replaceWith(s);
   }
   // Resimler IndexedDB'den asenkron gelir; çizimden sonra adresleri bağlanır
@@ -6835,7 +7039,7 @@
       if (!b || !b.data) return;
       askConfirm({
         title: `${fmtDayLabel(b.date)} yedeği geri yüklensin mi?`,
-        body: `Yedek: ${dataSummary(b.data)}\nŞu anki veriler (${dataSummary(collectData())}) bu yedekle değiştirilecek. Hemen ardından "Geri al" ile eski haline dönebilirsiniz.`,
+        body: `Yedek: ${dataSummary(b.data)}\nŞu anki veriler (${dataSummary(collectData())}) bu yedekle değiştirilecek. Hemen ardından "Geri al" ile eski haline dönebilirsiniz.${bulutNotu()}`,
         ok: 'Geri yükle', onOk: () => restoreData(b.data, 'Yedek geri yüklendi')
       });
     },
@@ -6857,6 +7061,30 @@
       S.settings = Object.assign({}, S.settings, { sound });
       saveSettings();
       if (sound) blip();                                  // açınca örnek sesi çal
+    },
+    tasimaOzeti() {   // "Verilerimi buluta gönder": önce özet ve onay; bulutta fark varsa önce bulut yedeği indirilir
+      const E = window.PlanizeEsitleme; if (!E) return;
+      E.tasimaOzeti().then((o) => {
+        if (!o.hazir) { showToast(o.neden); render(); return; }
+        const s = o.say, y = (k) => (s[k] ? s[k].yerel : 0), u = (k) => (s[k] ? s[k].bulutta : 0);
+        const mb = o.resimBayt < 1048576 ? Math.round(o.resimBayt / 1024) + ' KB' : (o.resimBayt / 1048576).toFixed(1).replace('.', ',') + ' MB';
+        let body = `Bu cihazdan buluta gidecek: ${y('gorevler')} görev, ${y('notlar')} not, ${y('listeler')} liste, ${y('vizyon_panolar')} Vizyon panosu (${y('vizyon_kutucuklar')} kutucuk), ${o.resim} resim (${mb})` + (y('arsiv') ? `, ${y('arsiv')} arşivli görev` : '') + '.\n';
+        if (o.uzakVar) {
+          body += `Bulutta zaten kayıtlı: ${u('gorevler')} görev, ${u('notlar')} not, ${u('listeler')} liste, ${u('vizyon_panolar')} Vizyon panosu.\n`;
+          body += o.degisecek ? `DİKKAT: ${o.degisecek} kayıt bulutta zaten var ve farklı; bu cihazdaki sürümle DEĞİŞTİRİLECEK. Devam ederseniz önce buluttaki verinin yedeği bir dosya olarak indirilir.\n` : 'Aynı kayıtlar bulutta zaten aynı; üzerine yazılacak bir fark yok.\n';
+          body += 'Bulutta olup bu cihazda olmayan kayıtlar silinmez, bu cihaza da gelir.\n';
+        } else { body += 'Bulut şu an boş.\n'; }
+        body += 'Bu cihazdaki veriler silinmez.';
+        askConfirm({
+          title: 'Veriler buluta gönderilsin mi?', body, ok: o.degisecek ? 'Yedeği indir ve buluta gönder' : 'Buluta gönder',
+          onOk: () => {
+            if (o.degisecek) { const yd = E.bulutYedegi(); downloadText(yd.ad, yd.metin); }
+            showToast('Veriler buluta gönderiliyor…');
+            E.tasimayaBasla().then((r) => showToast(r && r.ok ? 'Veriler buluta gönderildi' : 'Gönderme tamamlanamadı: ' + ((r && r.mesaj) || 'bağlantıyı kontrol edip tekrar deneyin')));
+          }
+        });
+        render();
+      });
     },
     esitleSimdi() { if (window.PlanizeEsitleme) window.PlanizeEsitleme.simdi(); },
     cakismaGeriGetir(el) { if (window.PlanizeEsitleme && window.PlanizeEsitleme.geriGetir(el.dataset.v)) showToast('Önceki sürüm geri getirildi'); },
