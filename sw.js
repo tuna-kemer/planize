@@ -3,9 +3,9 @@
    Strateji (karar B2): uygulama dosyaları "önce internet, olmazsa saklanan" (internet 4 sn içinde cevap vermezse saklanan kullanılır);
    yeni sürüm internet varken hemen gelir. Firebase kitaplığı sürümlü ve değişmez olduğundan "önce saklanan" olarak tutulur.
    Firestore/Auth ağ trafiğine (googleapis.com vb.) hiç karışılmaz. Yeni sürümde yalnızca SURUM değiştirilir: eski saklananlar silinir. */
-const SURUM = 'planize-2026-10-19-1';
+const SURUM = 'planize-2026-10-19-2';
 const DOSYALAR = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
-  'fonts/inter-latin.woff2', 'fonts/inter-latin-ext.woff2', 'fonts/material-symbols-planim.woff2'];
+  'fonts/inter-latin.woff2', 'fonts/inter-latin-ext.woff2', 'fonts/material-symbols-planize.woff2'];
 const FIREBASE_ADRES = 'https://www.gstatic.com/firebasejs/';
 
 self.addEventListener('install', (e) => {

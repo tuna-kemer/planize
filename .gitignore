@@ -5,6 +5,8 @@
 *.key
 planize-yedek-*.json
 planize-bulut-yedek-*.json
+planize-kurtarma-*.json
+planize-bozuk-veri-*.json
 
 # OS and editor files
 .DS_Store
